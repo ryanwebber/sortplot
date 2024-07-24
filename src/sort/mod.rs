@@ -1,14 +1,19 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    ops::{Coroutine, CoroutineState, Deref},
+    pin::Pin,
+};
 
 pub mod bubblesort;
+pub mod quicksort;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Swap(pub usize, pub usize);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SortState {
-    Sorted,
-    Unsorted(usize),
+impl Swap {
+    pub fn is_significant(&self) -> bool {
+        self.0 != self.1
+    }
 }
 
 impl Display for Swap {
@@ -17,54 +22,73 @@ impl Display for Swap {
     }
 }
 
-pub trait SortFunction {
-    fn step(&mut self, data: &[usize]) -> Option<Swap>;
+pub struct SortData {
+    data: Vec<usize>,
 }
 
-pub struct Sorter<T>
-where
-    T: PartialOrd + PartialEq,
-{
-    data: Vec<T>,
-}
-
-impl Sorter<usize> {
+impl SortData {
     pub fn new(data: Vec<usize>) -> Self {
         Self { data }
     }
 
-    pub fn data(&self) -> &[usize] {
-        &self.data
+    pub fn is_sorted(&self) -> bool {
+        self.data.windows(2).all(|w| w[0] <= w[1])
     }
 
-    pub fn state(&self) -> SortState {
-        let unsorted_count = self.data.windows(2).filter(|w| w[0] > w[1]).count();
-        if unsorted_count == 0 {
-            SortState::Sorted
-        } else {
-            SortState::Unsorted(unsorted_count)
-        }
-    }
-
-    pub fn step<T: SortFunction + ?Sized>(&mut self, algorithm: &mut T) -> Option<Swap> {
-        let swap = algorithm.step(&self.data)?;
-        self.data.swap(swap.0, swap.1);
-        Some(swap)
+    #[must_use = "Should be yielding the result of this method"]
+    pub fn swap(&mut self, a: usize, b: usize) -> Swap {
+        self.data.swap(a, b);
+        Swap(a, b)
     }
 }
 
+impl Deref for SortData {
+    type Target = [usize];
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+pub struct Sorter {
+    generator: Pin<Box<dyn Coroutine<(), Yield = Swap, Return = SortData>>>,
+}
+
+impl Sorter {
+    pub fn new(generator: impl Coroutine<(), Yield = Swap, Return = SortData> + 'static) -> Self {
+        Self {
+            generator: Box::pin(generator),
+        }
+    }
+
+    pub fn step(&mut self) -> Option<Swap> {
+        loop {
+            let generator = std::pin::pin!(&mut self.generator);
+            match Coroutine::resume(generator, ()) {
+                CoroutineState::Yielded(swap) if swap.is_significant() => return Some(swap),
+                CoroutineState::Yielded(_) => { /* Continue */ }
+                CoroutineState::Complete(data) => {
+                    assert!(data.is_sorted());
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+pub type SortFunction = fn(data: SortData) -> Sorter;
+
 pub struct SortAlgorithm {
     pub name: &'static str,
-    pub algorithm: fn() -> Box<dyn SortFunction>,
+    pub algorithm: SortFunction,
 }
 
 pub const ALGORITHMS: &'static [SortAlgorithm] = &[
     SortAlgorithm {
-        name: "Bubblesort",
-        algorithm: || Box::new(bubblesort::Bubblesort::default()),
+        name: "Quick Sort",
+        algorithm: quicksort::sort,
     },
     SortAlgorithm {
-        name: "Placeholdersort",
-        algorithm: || Box::new(bubblesort::Bubblesort::default()),
+        name: "Bubble Sort",
+        algorithm: bubblesort::sort,
     },
 ];

@@ -1,21 +1,16 @@
-use super::{SortFunction, Swap};
+use super::{SortData, Sorter};
 
-pub struct Bubblesort;
-
-impl Default for Bubblesort {
-    fn default() -> Self {
-        Bubblesort
-    }
-}
-
-impl SortFunction for Bubblesort {
-    fn step(&mut self, data: &[usize]) -> Option<Swap> {
-        for i in 0..data.len() - 1 {
-            if data[i] > data[i + 1] {
-                return Some(Swap(i, i + 1));
+pub fn sort(mut data: SortData) -> Sorter {
+    Sorter::new(move || {
+        let len = data.len();
+        for _ in 0..len {
+            for j in 1..len {
+                if data[j - 1] > data[j] {
+                    yield data.swap(j - 1, j);
+                }
             }
         }
 
-        None
-    }
+        data
+    })
 }

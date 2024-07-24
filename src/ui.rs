@@ -1,11 +1,17 @@
+use std::{
+    ops::{Coroutine, CoroutineState},
+    pin::Pin,
+};
+
 use animation::Animation;
 use nannou::prelude::*;
 
-use crate::sort::{SortAlgorithm, SortFunction, SortState, Sorter, Swap, ALGORITHMS};
+use crate::sort::{self, Swap};
 
-const ANIMATION_DURATION: std::time::Duration = std::time::Duration::from_millis(50);
+const SWAP_DURATION: std::time::Duration = std::time::Duration::from_millis(50);
+const SHUFFLE_DURATION: std::time::Duration = std::time::Duration::from_millis(250);
 const DISPLAY_STEP_DURATION: std::time::Duration = std::time::Duration::from_millis(80);
-const INTERMISSION_DURATION: std::time::Duration = std::time::Duration::from_secs(3);
+const INTERMISSION_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
 
 // Padding around the entire window
 const MAIN_PADDING: f32 = 32.0;
@@ -26,67 +32,54 @@ impl Visualizer {
 }
 
 enum DisplayStep {
-    Reset { data: Vec<usize> },
-    Swap { swap: Swap },
+    Wait(std::time::Duration),
+    Reset {
+        data: Vec<usize>,
+        algorithm: &'static str,
+    },
+    Swap(Swap),
 }
 
 struct Controller {
-    next_tick: std::time::Duration,
-    current_state: Sorter<usize>,
-    current_algorithm: Box<dyn SortFunction>,
-    current_algorithm_index: Option<usize>,
+    generator: Pin<Box<dyn Coroutine<(), Yield = DisplayStep, Return = !>>>,
 }
 
 impl Controller {
-    fn with_data(data: Vec<usize>) -> Self {
+    fn new(data_count: usize) -> Self {
         Self {
-            next_tick: INTERMISSION_DURATION,
-            current_state: Sorter::new(data),
-            current_algorithm: (ALGORITHMS[0].algorithm)(),
-            current_algorithm_index: None,
-        }
-    }
-
-    fn current_algorithm(&self) -> &SortAlgorithm {
-        &ALGORITHMS[self.current_algorithm_index.unwrap_or(0)]
-    }
-
-    fn update(&mut self, elapsed: std::time::Duration) -> Option<DisplayStep> {
-        if self.next_tick <= elapsed {
-            match self.current_state.state() {
-                SortState::Sorted => {
+            generator: Box::pin(move || loop {
+                for algorithm in sort::ALGORITHMS {
+                    // Create new shuffled data
                     let data = {
                         use rand::seq::SliceRandom;
                         let mut rng = rand::thread_rng();
-                        let mut data = (0..self.current_state.data().len()).collect::<Vec<_>>();
+                        let mut data = (0..data_count).collect::<Vec<_>>();
                         data.shuffle(&mut rng);
                         data
                     };
 
-                    let algorithm_index = if let Some(index) = self.current_algorithm_index {
-                        (index + 1) % ALGORITHMS.len()
-                    } else {
-                        0
+                    yield DisplayStep::Wait(INTERMISSION_DURATION);
+                    yield DisplayStep::Reset {
+                        data: data.to_vec(),
+                        algorithm: algorithm.name,
                     };
 
-                    self.next_tick += INTERMISSION_DURATION;
-                    self.current_algorithm = (ALGORITHMS[algorithm_index].algorithm)();
-                    self.current_state = Sorter::new(data);
-                    Some(DisplayStep::Reset {
-                        data: self.current_state.data().to_vec(),
-                    })
-                }
-                SortState::Unsorted(_) => {
-                    self.next_tick += DISPLAY_STEP_DURATION;
-                    if let Some(swap) = self.current_state.step(self.current_algorithm.as_mut()) {
-                        Some(DisplayStep::Swap { swap })
-                    } else {
-                        None
+                    yield DisplayStep::Wait(INTERMISSION_DURATION);
+                    let mut sorter = (algorithm.algorithm)(sort::SortData::new(data));
+                    while let Some(swap) = sorter.step() {
+                        yield DisplayStep::Swap(swap);
+                        yield DisplayStep::Wait(DISPLAY_STEP_DURATION);
                     }
                 }
-            }
-        } else {
-            None
+            }),
+        }
+    }
+
+    fn next(&mut self) -> DisplayStep {
+        let generator = std::pin::pin!(&mut self.generator);
+        match Coroutine::resume(generator, ()) {
+            CoroutineState::Yielded(step) => step,
+            CoroutineState::Complete(_) => unreachable!(),
         }
     }
 }
@@ -94,25 +87,41 @@ impl Controller {
 struct Model {
     bars: Vec<Bar>,
     controller: Controller,
+    wait_until: std::time::Duration,
+    current_algorithm: Option<&'static str>,
 }
 
 impl Model {
     fn update(&mut self, update: Update) {
-        match self.controller.update(update.since_start) {
-            Some(DisplayStep::Reset { data }) => {
-                self.bars.sort_by(|a, b| a.value.cmp(&b.value));
-                for (i, value) in data.iter().enumerate() {
-                    self.bars[*value].animate(update.since_start, i);
+        if update.since_start < self.wait_until {
+            return;
+        }
+
+        loop {
+            match self.controller.next() {
+                DisplayStep::Wait(duration) => {
+                    self.wait_until = update.since_start + duration;
+                    break;
+                }
+                DisplayStep::Reset { data, algorithm } => {
+                    self.current_algorithm = Some(algorithm);
+                    self.bars.sort_by(|a, b| a.value.cmp(&b.value));
+                    for (i, value) in data.iter().enumerate() {
+                        self.bars[*value].animate(
+                            update.since_start + std::time::Duration::from_millis(i as u64 * 2),
+                            i,
+                            SHUFFLE_DURATION,
+                        );
+                    }
+                }
+                DisplayStep::Swap(swap) => {
+                    let (i, j) = (swap.0, swap.1);
+                    let bar_idx_i = self.bars.iter().position(|bar| bar.index == i).unwrap();
+                    let bar_idx_j = self.bars.iter().position(|bar| bar.index == j).unwrap();
+                    self.bars[bar_idx_i].animate(update.since_start, j, SWAP_DURATION);
+                    self.bars[bar_idx_j].animate(update.since_start, i, SWAP_DURATION);
                 }
             }
-            Some(DisplayStep::Swap { swap, .. }) => {
-                let (i, j) = (swap.0, swap.1);
-                let bar_idx_i = self.bars.iter().position(|bar| bar.index == i).unwrap();
-                let bar_idx_j = self.bars.iter().position(|bar| bar.index == j).unwrap();
-                self.bars[bar_idx_i].animate(update.since_start, j);
-                self.bars[bar_idx_j].animate(update.since_start, i);
-            }
-            None => {}
         }
     }
 }
@@ -124,17 +133,20 @@ fn model(app: &App) -> Model {
         .build()
         .expect("Failed to build application window");
 
-    let data = (0..100).collect::<Vec<_>>();
-    let controller = Controller::with_data(data);
-    let bars = controller
-        .current_state
-        .data()
-        .iter()
+    const NUM_BARS: usize = 100;
+
+    let controller = Controller::new(NUM_BARS);
+    let bars = (0..NUM_BARS)
         .enumerate()
-        .map(|(i, &v)| Bar::new(i, v))
+        .map(|(i, v)| Bar::new(i, v))
         .collect();
 
-    Model { bars, controller }
+    Model {
+        bars,
+        controller,
+        wait_until: std::time::Duration::ZERO,
+        current_algorithm: None,
+    }
 }
 
 fn update(_: &App, model: &mut Model, update: Update) {
@@ -156,8 +168,8 @@ fn view(app: &App, model: &Model, frame: Frame) {
         bar.render(elapsed, &layout, &draw);
     }
 
-    {
-        draw.text(model.controller.current_algorithm().name)
+    if let Some(algorithm) = model.current_algorithm {
+        draw.text(algorithm)
             .x_y(0.0, layout.height / 2.0 - 12.0)
             .w(layout.width - 24.0)
             .font_size(12)
@@ -217,14 +229,14 @@ impl Bar {
         }
     }
 
-    fn animate(&mut self, start: std::time::Duration, index: usize) {
+    fn animate(&mut self, start: std::time::Duration, index: usize, duration: std::time::Duration) {
         let initial_value = self.index as f32;
         let target_value = index as f32;
         self.animation = Some(Animation::new(
             initial_value,
             target_value,
             start,
-            ANIMATION_DURATION,
+            duration,
             animation::Easing::EaseInOut,
         ));
 
@@ -324,7 +336,7 @@ mod animation {
         }
 
         pub fn evaluate(&self, time: std::time::Duration) -> Step<T> {
-            let elapsed = time - self.start;
+            let elapsed = time.saturating_sub(self.start);
             if elapsed >= self.duration {
                 Step::Complete
             } else {
