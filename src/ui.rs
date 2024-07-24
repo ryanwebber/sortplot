@@ -138,7 +138,13 @@ fn model(app: &App) -> Model {
     let controller = Controller::new(NUM_BARS);
     let bars = (0..NUM_BARS)
         .enumerate()
-        .map(|(i, v)| Bar::new(i, v))
+        .map(|(i, v)| {
+            Bar::new(
+                i,
+                v,
+                hsva(0.8 * (i as f32) / (NUM_BARS as f32), 0.8, 0.8, 0.4),
+            )
+        })
         .collect();
 
     Model {
@@ -217,14 +223,16 @@ impl Layout {
 struct Bar {
     index: usize,
     value: usize,
+    color: Hsva,
     animation: Option<Animation<f32>>,
 }
 
 impl Bar {
-    fn new(index: usize, value: usize) -> Self {
+    fn new(index: usize, value: usize, color: Hsva) -> Self {
         Self {
             index,
             value,
+            color,
             animation: None,
         }
     }
@@ -255,10 +263,7 @@ impl Bar {
         };
 
         let frame = layout.frame_bar_element(interpolated_index, self.value);
-        draw.rect()
-            .xy(frame.xy())
-            .wh(frame.wh())
-            .color(rgba(0.0, 0.5, 1.0, 0.4));
+        draw.rect().xy(frame.xy()).wh(frame.wh()).color(self.color);
     }
 }
 
