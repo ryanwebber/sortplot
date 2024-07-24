@@ -5,6 +5,7 @@ use std::{
 };
 
 pub mod bubblesort;
+pub mod combsort;
 pub mod quicksort;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +84,10 @@ pub struct SortAlgorithm {
 }
 
 pub const ALGORITHMS: &'static [SortAlgorithm] = &[
+    SortAlgorithm {
+        name: "Comb Sort",
+        algorithm: combsort::sort,
+    },
     SortAlgorithm {
         name: "Quick Sort",
         algorithm: quicksort::sort,

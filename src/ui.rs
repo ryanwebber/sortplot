@@ -3,14 +3,16 @@ use std::{
     pin::Pin,
 };
 
-use animation::Animation;
+use animation::{Animation, Interpolatable};
 use nannou::prelude::*;
 
 use crate::sort::{self, Swap};
 
-const SWAP_DURATION: std::time::Duration = std::time::Duration::from_millis(50);
-const SHUFFLE_DURATION: std::time::Duration = std::time::Duration::from_millis(250);
-const DISPLAY_STEP_DURATION: std::time::Duration = std::time::Duration::from_millis(80);
+const NUM_ELEMENTS_TO_SORT: usize = 100;
+
+const SWAP_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
+const SHUFFLE_DURATION: std::time::Duration = std::time::Duration::from_millis(400);
+const DISPLAY_STEP_DURATION: std::time::Duration = std::time::Duration::from_millis(200);
 const INTERMISSION_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
 
 // Padding around the entire window
@@ -129,20 +131,24 @@ impl Model {
 fn model(app: &App) -> Model {
     _ = app
         .new_window()
+        .title("Sortplot")
         .view(view)
         .build()
         .expect("Failed to build application window");
 
-    const NUM_BARS: usize = 100;
-
-    let controller = Controller::new(NUM_BARS);
-    let bars = (0..NUM_BARS)
+    let controller = Controller::new(NUM_ELEMENTS_TO_SORT);
+    let bars = (0..NUM_ELEMENTS_TO_SORT)
         .enumerate()
         .map(|(i, v)| {
             Bar::new(
                 i,
                 v,
-                hsva(0.8 * (i as f32) / (NUM_BARS as f32), 0.8, 0.8, 0.4),
+                hsva(
+                    0.8 * (i as f32) / (NUM_ELEMENTS_TO_SORT as f32),
+                    0.8,
+                    0.8,
+                    0.4,
+                ),
             )
         })
         .collect();
@@ -252,18 +258,28 @@ impl Bar {
     }
 
     fn render(&self, time: std::time::Duration, layout: &Layout, draw: &Draw) {
-        let interpolated_index = 'index: {
+        let (interpolated_index, t) = 'index: {
             if let Some(animation) = &self.animation {
-                if let animation::Step::Updated(value) = animation.evaluate(time) {
-                    break 'index value;
+                if let animation::Step::Updated(value, t) = animation.evaluate(time) {
+                    break 'index (value, t);
                 }
             }
 
-            self.index as f32
+            (self.index as f32, 0.0)
         };
 
         let frame = layout.frame_bar_element(interpolated_index, self.value);
-        draw.rect().xy(frame.xy()).wh(frame.wh()).color(self.color);
+        let t010 = (t * f32::PI()).sin();
+
+        let xy = frame.xy();
+        let wh = frame.wh();
+        let color = {
+            let mut color = self.color;
+            color.alpha = Interpolatable::interpolate(&color.alpha, &1.0, t010);
+            color
+        };
+
+        draw.rect().xy(xy).wh(wh).color(color);
     }
 }
 
@@ -271,7 +287,7 @@ mod animation {
 
     pub enum Step<T> {
         Complete,
-        Updated(T),
+        Updated(T, f32),
     }
 
     pub enum Easing {
@@ -346,7 +362,8 @@ mod animation {
                 Step::Complete
             } else {
                 let t = elapsed.as_secs_f32() / self.duration.as_secs_f32();
-                Step::Updated(self.interpolation.interpolate(self.easing.apply(t)))
+                let t = self.easing.apply(t);
+                Step::Updated(self.interpolation.interpolate(t), t)
             }
         }
     }
