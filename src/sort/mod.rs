@@ -6,7 +6,9 @@ use std::{
 
 pub mod bubblesort;
 pub mod combsort;
+pub mod icantbelieveitcansort;
 pub mod quicksort;
+pub mod shellsort;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Swap(pub usize, pub usize);
@@ -85,12 +87,20 @@ pub struct SortAlgorithm {
 
 pub const ALGORITHMS: &'static [SortAlgorithm] = &[
     SortAlgorithm {
+        name: "Quick Sort",
+        algorithm: quicksort::sort,
+    },
+    SortAlgorithm {
         name: "Comb Sort",
         algorithm: combsort::sort,
     },
     SortAlgorithm {
-        name: "Quick Sort",
-        algorithm: quicksort::sort,
+        name: "Shell Sort",
+        algorithm: shellsort::sort,
+    },
+    SortAlgorithm {
+        name: "I-Can't-Believe-It-Can Sort",
+        algorithm: icantbelieveitcansort::sort,
     },
     SortAlgorithm {
         name: "Bubble Sort",
